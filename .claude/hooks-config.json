@@ -1,0 +1,86 @@
+{
+  "version": "1.0",
+  "description": "Claude Code hooks configuration for centralized hook system",
+  "central_hook_repo": "e:/_projectsGithub/claude-hooks-system",
+  
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "name": "zo_report_event",
+        "type": "powershell",
+        "script": "hooks/zo_report_event.ps1",
+        "timeout": 5,
+        "enabled": true,
+        "description": "Log user prompt submission events"
+      },
+      {
+        "name": "mcp_telemetry",
+        "type": "powershell", 
+        "script": "hooks/mcp_telemetry.ps1",
+        "timeout": 3,
+        "enabled": true,
+        "description": "Log MCP telemetry for mcp_* tools"
+      }
+    ],
+    
+    "PostToolUse": [
+      {
+        "name": "zo_report_event",
+        "type": "powershell",
+        "script": "hooks/zo_report_event.ps1",
+        "timeout": 5,
+        "enabled": true,
+        "description": "Log post-tool-use events"
+      },
+      {
+        "name": "mcp_telemetry", 
+        "type": "powershell",
+        "script": "hooks/mcp_telemetry.ps1",
+        "timeout": 3,
+        "enabled": true,
+        "description": "Log MCP telemetry for mcp_* tools"
+      }
+    ],
+    
+    "SessionStart": [
+      {
+        "name": "zo_report_event",
+        "type": "powershell",
+        "script": "hooks/zo_report_event.ps1",
+        "timeout": 5,
+        "enabled": true,
+        "description": "Log session start events"
+      }
+    ],
+    
+    "Stop": [
+      {
+        "name": "zo_report_event",
+        "type": "powershell",
+        "script": "hooks/zo_report_event.ps1", 
+        "timeout": 5,
+        "enabled": true,
+        "description": "Log session stop events"
+      }
+    ]
+  },
+  
+  "chroma_bridge": {
+    "enabled": true,
+    "endpoint": "http://localhost:9000",
+    "auto_start": true,
+    "startup_script": "start_chroma_bridge.ps1"
+  },
+  
+  "logging": {
+    "level": "info",
+    "directory": "$env:USERPROFILE\\.zo\\claude-events",
+    "retention_days": 30
+  },
+  
+  "windows_compatibility": {
+    "use_powershell": true,
+    "execution_policy": "Bypass",
+    "file_extensions": [".ps1", ".py"]
+  }
+}

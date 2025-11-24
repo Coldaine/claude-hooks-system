@@ -1,0 +1,19 @@
+# Claude Code Hooks - Enforce LF line endings for cross-platform compatibility
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Hooks directory
+hooks/** text eol=lf
+
+# Windows launchers (CRLF for .cmd/.ps1)
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary files
+*.pyc binary
+*.pyo binary
+*.db binary

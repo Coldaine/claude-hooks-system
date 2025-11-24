@@ -1,10 +1,30 @@
 #!/usr/bin/env python3
+"""
+General event reporter for Claude Code hooks.
+Logs lifecycle/tool events locally and POSTs to HTTP endpoint (e.g. Chroma bridge).
+Uses canonical schema v1.0 via event_utils module.
+"""
 import sys
 import os
 import json
-import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+# Import shared event utilities
+try:
+    from event_utils import (
+        build_event_envelope,
+        get_run_id_from_env_or_generate,
+        utc_now_iso
+    )
+except ImportError:
+    # Fallback if event_utils not in path
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from event_utils import (
+        build_event_envelope,
+        get_run_id_from_env_or_generate,
+        utc_now_iso
+    )
 
 try:
     import urllib.request
@@ -17,29 +37,54 @@ def safe_get(d: Dict[str, Any], key: str, default=None):
     return d.get(key, default)
 
 
-def send_http_event(endpoint: str, event: Dict[str, Any]):
+def send_http_event(endpoint: str, event: Dict[str, Any], max_retries: int = 3):
+    """
+    POST event to HTTP endpoint with exponential backoff retry.
+    
+    Args:
+        endpoint: HTTP(S) URL
+        event: Event envelope to send
+        max_retries: Maximum retry attempts
+    """
     if not endpoint or not urllib:
         return
 
     data = json.dumps(event).encode("utf-8")
-    req = urllib.request.Request(
-        endpoint,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=2.0) as _:
-            pass
-    except Exception as e:
-        # Non-blocking: log but don't fail the hook
-        print(f"[zo_report_event] HTTP error: {e}", file=sys.stderr)
+    
+    # Add API key if configured
+    headers = {"Content-Type": "application/json"}
+    if api_key := os.getenv("ZO_API_KEY"):
+        headers["X-API-Key"] = api_key
+    
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(
+                endpoint,
+                data=data,
+                headers=headers,
+                method="POST",
+            )
+            timeout = 2.0 * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                if response.status in (200, 201, 202):
+                    return  # Success
+        except urllib.error.HTTPError as e:
+            if e.code == 409:  # Duplicate (idempotent)
+                return
+            print(f"[zo_report_event] HTTP {e.code}: {e.reason} (attempt {attempt+1}/{max_retries})", file=sys.stderr)
+        except Exception as e:
+            print(f"[zo_report_event] HTTP error: {e} (attempt {attempt+1}/{max_retries})", file=sys.stderr)
+        
+        if attempt < max_retries - 1:
+            import time
+            time.sleep(0.5 * (2 ** attempt))  # Sleep before retry: 0.5s, 1s, 2s
 
 
 def append_local_log(log_dir: Path, event: Dict[str, Any]):
+    """Append event to daily JSONL log file."""
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        day = datetime.datetime.utcnow().strftime("%Y%m%d")
+        day = utc_now_iso()[:10].replace('-', '')  # YYYYMMDD
         log_file = log_dir / f"events-{day}.jsonl"
         with log_file.open("a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
@@ -48,100 +93,118 @@ def append_local_log(log_dir: Path, event: Dict[str, Any]):
 
 
 def main():
+    """Main hook entry point."""
     try:
         input_data = json.load(sys.stdin)
     except Exception as e:
         print(f"[zo_report_event] invalid JSON on stdin: {e}", file=sys.stderr)
         sys.exit(1)
 
-    hook_event = safe_get(input_data, "hook_event_name", "")
-    session_id = safe_get(input_data, "session_id", "")
-    cwd = safe_get(input_data, "cwd", "")
-    transcript_path = safe_get(input_data, "transcript_path", "")
-
-    now = datetime.datetime.utcnow().isoformat() + "Z"
-
-    # Build a compact event envelope
-    event = {
-        "ts": now,
-        "hook_event_name": hook_event,
-        "session_id": session_id,
-        "cwd": cwd,
-        "transcript_path": transcript_path,
-        "tool_name": safe_get(input_data, "tool_name"),
-        "tool_use_id": safe_get(input_data, "tool_use_id"),
-        "permission_mode": safe_get(input_data, "permission_mode"),
-        "prompt": safe_get(input_data, "prompt"),
-        "notification_type": safe_get(input_data, "notification_type"),
-        "stop_hook_active": safe_get(input_data, "stop_hook_active"),
-        "source": {
-            "remote": (os.getenv("CLAUDE_CODE_REMOTE") == "true"),
-            "project_dir": os.getenv("CLAUDE_PROJECT_DIR"),
-            "host": os.uname().nodename if hasattr(os, "uname") else None,
-        },
-        "payload": input_data,  # full raw payload for later ingestion
+    # Extract hook context
+    hook_event = input_data.get("hook_event_name", "")
+    session_id = input_data.get("session_id", "unknown")
+    run_id = get_run_id_from_env_or_generate()
+    cwd = input_data.get("cwd", "")
+    
+    # Map hook event to event_type
+    event_type_map = {
+        "UserPromptSubmit": "progress",
+        "PostToolUse": "progress",
+        "SessionStart": "session_start",
+        "SessionEnd": "session_end",
+        "Stop": "session_end",
+        "PreToolUse": "progress"
     }
+    event_type = event_type_map.get(hook_event, "progress")
+    
+    # Determine level
+    level = "info"
+    if error_data := input_data.get("error"):
+        level = "error"
+        event_type = "error"
+    
+    # Build enriched data payload
+    data_payload = {
+        "hook_event_name": hook_event,
+        "transcript_path": input_data.get("transcript_path", ""),
+        "permission_mode": input_data.get("permission_mode"),
+        "notification_type": input_data.get("notification_type"),
+        "stop_hook_active": input_data.get("stop_hook_active"),
+        "prompt": input_data.get("prompt", "")[:1000] if input_data.get("prompt") else None  # Truncate
+    }
+    
+    # Build message summary
+    msg = f"{hook_event} event"
+    if tool_name := input_data.get("tool_name"):
+        msg = f"{hook_event}: {tool_name}"
+    
+    # Build canonical event envelope using event_utils
+    event = build_event_envelope(
+        event_type=event_type,
+        session_id=session_id,
+        run_id=run_id,
+        level=level,
+        hook_event_name=hook_event,
+        msg=msg,
+        data=data_payload,
+        tool_name=input_data.get("tool_name"),
+        tool_use_id=input_data.get("tool_use_id"),
+        cwd=cwd,
+        redaction_mode=os.getenv("ZO_REDACTION_MODE", "strict")
+    )
 
     # 1) Local JSONL log
     log_root = os.getenv("ZO_EVENT_LOG_DIR", os.path.expanduser("~/.zo/claude-events"))
     append_local_log(Path(log_root), event)
 
-    # 2) Optional HTTP endpoint (Zo/computer, Chroma mock, etc.)
-    endpoint = os.getenv("ZO_EVENT_ENDPOINT", "")  # e.g. http://localhost:9000/events
+    # 2) Optional HTTP endpoint (Chroma bridge)
+    endpoint = os.getenv("ZO_EVENT_ENDPOINT", "")
     if endpoint:
         send_http_event(endpoint, event)
 
     # 3) Optional structured output back to Claude Code
     output = None
 
-    # For UserPromptSubmit: inject a tiny status line as additional context
+    # Inject contextual status lines for selected hook events
     if hook_event == "UserPromptSubmit":
         output = {
             "hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
                 "additionalContext": (
-                    f"[zo-log] Session {session_id or 'unknown'} "
-                    f"prompt logged at {now} (cwd={cwd})."
+                    f"[zo-log] Session {session_id} prompt logged | "
+                    f"run_id={run_id[:8]}... | event_id={event['event_id'][:8]}..."
                 )
             }
         }
 
-    # For PostToolUse: let Claude know we logged this tool call
     elif hook_event == "PostToolUse":
-        tool_name = safe_get(input_data, "tool_name", "")
-        tool_use_id = safe_get(input_data, "tool_use_id", "")
+        tool_name = input_data.get("tool_name", "")
         output = {
             "hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
                 "additionalContext": (
-                    f"[zo-log] Logged tool '{tool_name}' "
-                    f"use_id={tool_use_id or 'n/a'} for session {session_id or 'unknown'}."
+                    f"[zo-log] Tool '{tool_name}' logged | "
+                    f"run_id={run_id[:8]}... | event_id={event['event_id'][:8]}..."
                 )
             }
         }
 
-    # For SessionStart: inject a one-line "session opened" banner into context
     elif hook_event == "SessionStart":
         output = {
             "hookSpecificOutput": {
                 "hookEventName": "SessionStart",
                 "additionalContext": (
-                    f"[zo-log] Session {session_id or 'unknown'} started at {now} "
-                    f"(cwd={cwd}). Events are being streamed to Zo/Chroma."
+                    f"[zo-log] Session started | run_id={run_id} | "
+                    f"Events streaming to {endpoint or 'local-only'}"
                 )
             }
         }
 
-    # For Stop / SessionEnd we just log; we don't block or change behavior.
-    # output = None is fine.
-
     if output is not None:
         print(json.dumps(output))
 
-    # exit 0 -> no blocking, JSON (if any) is processed normally
     sys.exit(0)
 
 
 if __name__ == "__main__":
     main()
-

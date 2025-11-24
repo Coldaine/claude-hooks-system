@@ -1,0 +1,10 @@
+{
+  "event_id": "test-from-curl-001",
+  "ts": "2025-11-24T16:35:00Z",
+  "session_id": "test-session",
+  "run_id": "test-run-123",
+  "event_type": "progress",
+  "level": "info",
+  "msg": "Hello from Windows to Chroma Cloud!",
+  "schema_version": "1.0"
+}

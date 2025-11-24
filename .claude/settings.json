@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "SessionStart": {
+      "*": ["python hooks/session_start.py"]
+    },
+    "UserPromptSubmit": {
+      "*": [
+        "python hooks/zo_report_event.py"
+      ]
+    },
+    "PostToolUse": {
+      "Bash|Write|Edit|Read": [
+        "python hooks/zo_report_event.py"
+      ],
+      "mcp_.*": [
+        "python hooks/mcp_telemetry.py"
+      ]
+    },
+    "Stop": {
+      "*": ["python hooks/zo_report_event.py"]
+    }
+  },
+  "disableAllHooks": false
+}
