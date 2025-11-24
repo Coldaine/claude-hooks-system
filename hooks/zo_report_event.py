@@ -15,7 +15,8 @@ try:
     from event_utils import (
         build_event_envelope,
         get_run_id_from_env_or_generate,
-        utc_now_iso
+        utc_now_iso,
+        send_event_to_chroma
     )
 except ImportError:
     # Fallback if event_utils not in path
@@ -23,61 +24,13 @@ except ImportError:
     from event_utils import (
         build_event_envelope,
         get_run_id_from_env_or_generate,
-        utc_now_iso
+        utc_now_iso,
+        send_event_to_chroma
     )
-
-try:
-    import urllib.request
-    import urllib.error
-except ImportError:
-    urllib = None  # Very unlikely, but be defensive
 
 
 def safe_get(d: Dict[str, Any], key: str, default=None):
     return d.get(key, default)
-
-
-def send_http_event(endpoint: str, event: Dict[str, Any], max_retries: int = 3):
-    """
-    POST event to HTTP endpoint with exponential backoff retry.
-    
-    Args:
-        endpoint: HTTP(S) URL
-        event: Event envelope to send
-        max_retries: Maximum retry attempts
-    """
-    if not endpoint or not urllib:
-        return
-
-    data = json.dumps(event).encode("utf-8")
-    
-    # Add API key if configured
-    headers = {"Content-Type": "application/json"}
-    if api_key := os.getenv("ZO_API_KEY"):
-        headers["X-API-Key"] = api_key
-    
-    for attempt in range(max_retries):
-        try:
-            req = urllib.request.Request(
-                endpoint,
-                data=data,
-                headers=headers,
-                method="POST",
-            )
-            timeout = 2.0 * (2 ** attempt)  # Exponential backoff: 2s, 4s, 8s
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                if response.status in (200, 201, 202):
-                    return  # Success
-        except urllib.error.HTTPError as e:
-            if e.code == 409:  # Duplicate (idempotent)
-                return
-            print(f"[zo_report_event] HTTP {e.code}: {e.reason} (attempt {attempt+1}/{max_retries})", file=sys.stderr)
-        except Exception as e:
-            print(f"[zo_report_event] HTTP error: {e} (attempt {attempt+1}/{max_retries})", file=sys.stderr)
-        
-        if attempt < max_retries - 1:
-            import time
-            time.sleep(0.5 * (2 ** attempt))  # Sleep before retry: 0.5s, 1s, 2s
 
 
 def append_local_log(log_dir: Path, event: Dict[str, Any]):
@@ -153,14 +106,12 @@ def main():
         redaction_mode=os.getenv("ZO_REDACTION_MODE", "strict")
     )
 
-    # 1) Local JSONL log
+    # 1) Local JSONL log (always, as fallback)
     log_root = os.getenv("ZO_EVENT_LOG_DIR", os.path.expanduser("~/.zo/claude-events"))
     append_local_log(Path(log_root), event)
 
-    # 2) Optional HTTP endpoint (Chroma bridge)
-    endpoint = os.getenv("ZO_EVENT_ENDPOINT", "")
-    if endpoint:
-        send_http_event(endpoint, event)
+    # 2) Send directly to Chroma Cloud
+    send_event_to_chroma(event)
 
     # 3) Optional structured output back to Claude Code
     output = None

@@ -12,45 +12,19 @@ try:
     from event_utils import (
         build_event_envelope,
         generate_run_id,
-        utc_now_iso
+        utc_now_iso,
+        send_event_to_chroma
     )
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from event_utils import (
         build_event_envelope,
         generate_run_id,
-        utc_now_iso
+        utc_now_iso,
+        send_event_to_chroma
     )
 
-try:
-    import urllib.request
-    import urllib.error
-except ImportError:
-    urllib = None
-
 from pathlib import Path
-
-
-def send_http_event(endpoint: str, event: dict, max_retries: int = 3):
-    """POST event to HTTP endpoint with retry."""
-    if not endpoint or not urllib:
-        return
-
-    data = json.dumps(event).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if api_key := os.getenv("ZO_API_KEY"):
-        headers["X-API-Key"] = api_key
-    
-    for attempt in range(max_retries):
-        try:
-            req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
-            timeout = 2.0 * (2 ** attempt)
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                if response.status in (200, 201, 202):
-                    return
-        except Exception as e:
-            if attempt == max_retries - 1:
-                print(f"[session_start] HTTP error: {e}", file=sys.stderr)
 
 
 def append_local_log(log_dir: Path, event: dict):
@@ -97,13 +71,13 @@ def main():
         redaction_mode=os.getenv("ZO_REDACTION_MODE", "strict")
     )
 
-    # Log locally
+    # Log locally (always, as fallback)
     log_root = os.getenv("ZO_EVENT_LOG_DIR", os.path.expanduser("~/.zo/claude-events"))
     append_local_log(Path(log_root), event)
 
-    # Send to bridge
-    if endpoint := os.getenv("ZO_EVENT_ENDPOINT"):
-        send_http_event(endpoint, event)
+    # Send directly to Chroma Cloud
+    chroma_ok = send_event_to_chroma(event)
+    destination = "chroma-cloud" if chroma_ok else "local-only"
 
     # Output context injection
     output = {
@@ -111,7 +85,7 @@ def main():
             "hookEventName": "SessionStart",
             "additionalContext": (
                 f"[session] run_id={run_id} | "
-                f"Events → {endpoint or 'local-only'}"
+                f"Events → {destination}"
             )
         }
     }

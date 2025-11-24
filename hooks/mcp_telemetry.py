@@ -14,14 +14,16 @@ try:
     from event_utils import (
         build_event_envelope,
         get_run_id_from_env_or_generate,
-        utc_now_iso
+        utc_now_iso,
+        send_event_to_chroma
     )
 except ImportError:
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     from event_utils import (
         build_event_envelope,
         get_run_id_from_env_or_generate,
-        utc_now_iso
+        utc_now_iso,
+        send_event_to_chroma
     )
 
 
@@ -82,9 +84,12 @@ def main():
         redaction_mode=os.getenv("ZO_REDACTION_MODE", "strict")
     )
 
-    # Append to MCP-specific log
+    # Append to MCP-specific log (always, as fallback)
     log_root = os.getenv("MCP_TELEMETRY_LOG_DIR", os.path.expanduser("~/.zo/mcp-events"))
     append_mcp_log(Path(log_root), event)
+
+    # Send directly to Chroma Cloud
+    send_event_to_chroma(event)
 
     sys.exit(0)
 

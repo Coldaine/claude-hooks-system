@@ -330,3 +330,103 @@ def get_run_id_from_env_or_generate() -> str:
     Allows Conductor to set RUN_ID env var for spawned workers.
     """
     return os.getenv("CLAUDE_RUN_ID") or generate_run_id()
+
+
+# Chroma Cloud direct connection
+_chroma_client = None
+_chroma_collection = None
+
+
+def get_chroma_collection(collection_name: str = "events"):
+    """
+    Get or create a Chroma Cloud collection for direct event storage.
+
+    Requires environment variables:
+        CHROMA_API_KEY: Chroma Cloud API key
+        CHROMA_TENANT: Chroma Cloud tenant ID
+        CHROMA_DATABASE: Chroma Cloud database name
+
+    Returns:
+        ChromaDB collection or None if not configured/available
+    """
+    global _chroma_client, _chroma_collection
+
+    # Return cached collection if available
+    if _chroma_collection is not None:
+        return _chroma_collection
+
+    # Check for required environment variables
+    api_key = os.getenv("CHROMA_API_KEY")
+    tenant = os.getenv("CHROMA_TENANT")
+    database = os.getenv("CHROMA_DATABASE", "ClaudeCallHome")
+
+    if not api_key or not tenant:
+        return None
+
+    try:
+        import chromadb
+
+        if _chroma_client is None:
+            _chroma_client = chromadb.CloudClient(
+                tenant=tenant,
+                database=database,
+                api_key=api_key
+            )
+
+        _chroma_collection = _chroma_client.get_or_create_collection(
+            name=collection_name,
+            metadata={"description": "Claude Code event log"}
+        )
+        return _chroma_collection
+
+    except ImportError:
+        return None
+    except Exception as e:
+        import sys
+        print(f"[chroma] connection error: {e}", file=sys.stderr)
+        return None
+
+
+def send_event_to_chroma(event: Dict[str, Any], collection_name: str = "events") -> bool:
+    """
+    Send an event directly to Chroma Cloud.
+
+    Args:
+        event: Event envelope dictionary
+        collection_name: Target collection name
+
+    Returns:
+        True if sent successfully, False otherwise
+    """
+    collection = get_chroma_collection(collection_name)
+    if collection is None:
+        return False
+
+    try:
+        # Build metadata for filtering
+        metadata = {
+            "event_id": event.get("event_id", ""),
+            "session_id": event.get("session_id", ""),
+            "run_id": event.get("run_id", ""),
+            "event_type": event.get("event_type", ""),
+            "level": event.get("level", ""),
+            "ts": event.get("ts", ""),
+            "tool_name": event.get("tool_name", ""),
+            "worker_id": event.get("worker_id", ""),
+            "task_id": event.get("task_id", ""),
+            "hash": event.get("hash", "")
+        }
+        # Remove empty values (Chroma doesn't like None/empty)
+        metadata = {k: v for k, v in metadata.items() if v}
+
+        collection.add(
+            ids=[event["event_id"]],
+            documents=[json.dumps(event, ensure_ascii=False)],
+            metadatas=[metadata]
+        )
+        return True
+
+    except Exception as e:
+        import sys
+        print(f"[chroma] send error: {e}", file=sys.stderr)
+        return False
