@@ -86,6 +86,22 @@ def main():
     log_root = os.getenv("MCP_TELEMETRY_LOG_DIR", os.path.expanduser("~/.zo/mcp-events"))
     append_mcp_log(Path(log_root), event)
 
+    # Send to bridge (hardcoded default)
+    try:
+        import urllib.request
+        import urllib.error
+        endpoint = os.getenv("ZO_EVENT_ENDPOINT", "http://localhost:9000/ingest")
+        if endpoint:
+            data = json.dumps(event).encode("utf-8")
+            headers = {"Content-Type": "application/json"}
+            if api_key := os.getenv("ZO_API_KEY"):
+                headers["X-API-Key"] = api_key
+            req = urllib.request.Request(endpoint, data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                pass  # Success
+    except Exception:
+        pass  # Fail silently, local log is primary
+
     sys.exit(0)
 
 if __name__ == "__main__":

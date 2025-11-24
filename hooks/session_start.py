@@ -101,8 +101,9 @@ def main():
     log_root = os.getenv("ZO_EVENT_LOG_DIR", os.path.expanduser("~/.zo/claude-events"))
     append_local_log(Path(log_root), event)
 
-    # Send to bridge
-    if endpoint := os.getenv("ZO_EVENT_ENDPOINT"):
+    # Send to bridge (hardcoded endpoint)
+    endpoint = os.getenv("ZO_EVENT_ENDPOINT", "http://localhost:9000/ingest")
+    if endpoint:
         send_http_event(endpoint, event)
 
     # Output context injection
