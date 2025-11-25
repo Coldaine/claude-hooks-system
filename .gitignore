@@ -2,6 +2,11 @@
 .env
 .env.local
 
+# Database and runtime
+chroma_db/
+bridge.log
+*.sqlite3
+
 # Python
 __pycache__/
 *.py[cod]
