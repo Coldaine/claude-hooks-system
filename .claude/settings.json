@@ -1,4 +1,10 @@
 {
+  "env": {
+    "CHROMA_TENANT": "eb841491-46b0-4857-9b60-4b1dedc20049",
+    "CHROMA_DATABASE": "ClaudeCallHome",
+    "USE_CHROMA_CLOUD": "true",
+    "CHROMA_BRIDGE_PORT": "9000"
+  },
   "hooks": {
     "SessionStart": {
       "*": ["python hooks/session_start.py"]
