@@ -1,6 +1,8 @@
 # Environment variables and secrets
 .env
 .env.local
+.env.*
+.claude/settings.local.json
 
 # Python
 __pycache__/
